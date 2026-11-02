@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 mkdirSync(process.env.DATA_DIR || 'data', {recursive:true});
+if(process.env.NODE_ENV==='production' && !process.env.SETUP_TOKEN)throw new Error('SETUP_TOKEN is required in production');
 const db = new DatabaseSync(join(process.env.DATA_DIR || 'data','hr.sqlite'));
 db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT);
@@ -30,9 +31,11 @@ export const server=http.createServer(async(req,res)=>{
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('X-Frame-Options','DENY');res.setHeader('Content-Security-Policy',"default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'");
  if(!path.startsWith('/api/')){const files={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};if(!files[path])return send(res,404,{error:'غير موجود'});res.setHeader('Content-Type',path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html; charset=utf-8');return res.end(readFileSync(new URL('./public/'+files[path],import.meta.url)));}
  let body={};if(req.method==='POST'){if(req.headers.origin && req.headers.origin!==`http://${req.headers.host}` && req.headers.origin!==`https://${req.headers.host}`)return send(res,403,{error:'مصدر غير مسموح'});let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>20000)return send(res,413,{error:'طلب كبير'});}body=JSON.parse(raw||'{}');}
- if(path==='/api/status')return send(res,200,{needsSetup:!db.prepare('SELECT id FROM users LIMIT 1').get()});
+ if(path==='/api/health'){db.prepare('SELECT 1').get();return send(res,200,{ok:true});}
+ if(path==='/api/status')return send(res,200,{needsSetup:!db.prepare('SELECT id FROM users LIMIT 1').get(),requiresSetupToken:!!process.env.SETUP_TOKEN});
  if(path==='/api/setup'&&req.method==='POST'){
  if(db.prepare('SELECT id FROM users LIMIT 1').get())return send(res,409,{error:'تم الإعداد مسبقاً'});
+ if(process.env.SETUP_TOKEN){const expected=Buffer.from(process.env.SETUP_TOKEN);const supplied=Buffer.from(String(body.setup_token||''));if(expected.length!==supplied.length||!timingSafeEqual(expected,supplied))return send(res,403,{error:'رمز إعداد المدير غير صحيح'});}
  if(!body.name||!/^\S+@\S+\.\S+$/.test(body.email)||typeof body.password!=='string'||body.password.length<12)return send(res,400,{error:'أدخل الاسم والبريد وكلمة مرور لا تقل عن 12 حرفاً'});
  db.prepare('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)').run(body.name,body.email,hash(body.password),'admin');return send(res,201,{ok:true});}
  if(path==='/api/login'&&req.method==='POST'){const u=db.prepare('SELECT * FROM users WHERE email=?').get(String(body.email));if(!u||typeof body.password!=='string'||!verify(body.password,u.password))return send(res,401,{error:'بيانات الدخول غير صحيحة'});const token=randomBytes(32).toString('hex');db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(token,u.id,Date.now()+28800000);res.setHeader('Set-Cookie',`session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${process.env.SECURE_COOKIE==='1'?'; Secure':''}`);return send(res,200,{ok:true});}

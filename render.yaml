@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: icv-hr
+    runtime: node
+    plan: starter
+    region: frankfurt
+    numInstances: 1
+    buildCommand: node --check server.js && node --check public/app.js
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data/hr
+      - key: SECURE_COOKIE
+        value: "1"
+      - key: SETUP_TOKEN
+        generateValue: true
+    disk:
+      name: hr-data
+      mountPath: /var/data
+      sizeGB: 1
